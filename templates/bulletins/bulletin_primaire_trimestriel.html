@@ -1,0 +1,266 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bulletin trimestriel</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+    }
+
+    .header {
+      width: 100%;
+      border-bottom: 2px solid #000;
+      margin-bottom: 8px;
+    }
+
+    .logo {
+      width: 60px;
+    }
+
+    .logo-cell {
+      width: 15%;
+    }
+
+    .center {
+      text-align: center;
+    }
+
+    .republique {
+      font-weight: bold;
+    }
+
+    .ecole {
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .annee {
+      margin-top: 4px;
+    }
+
+    .identite {
+      width: 100%;
+      border: 1px solid #000;
+      margin-top: 6px;
+    }
+
+    .identite td {
+      padding: 6px;
+      vertical-align: top;
+    }
+
+    .titre {
+      background: #d9d9d9;
+      text-align: center;
+      font-weight: bold;
+      padding: 6px;
+      margin-top: 10px;
+    }
+
+    .notes {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 6px;
+    }
+
+    .notes th,
+    .notes td {
+      border: 1px solid #000;
+      padding: 4px;
+    }
+
+    .notes th {
+      background: #f0f0f0;
+    }
+
+    .recap {
+      width: 100%;
+      border: 1px solid #000;
+      margin-top: 8px;
+    }
+
+    .recap td {
+      padding: 6px;
+    }
+
+    .observations {
+      width: 100%;
+      border: 1px solid #000;
+      margin-top: 8px;
+    }
+
+    .observations td {
+      padding: 8px;
+      height: 60px;
+    }
+
+    .signatures {
+      width: 100%;
+      margin-top: 16px;
+    }
+
+    .signatures td {
+      text-align: center;
+      padding-top: 30px;
+    }
+
+    .date {
+      margin-top: 10px;
+      font-size: 10px;
+      text-align: right;
+    }
+
+    .header {
+        width: 100%;
+        border-bottom: 2px solid #000;
+        margin-bottom: 8px;
+    }
+
+        .logo-cell {
+        width: 15%;
+        vertical-align: top;
+    }
+
+        /* .logo {
+        width: 60px;
+    } */
+
+        .header-center {
+        width: 70%;
+        text-align: center;
+    }
+
+        .logo-cell.left {
+        text-align: left;
+    }
+
+        .logo-cell.right {
+        text-align: right;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ================= EN-TÊTE ================= -->
+<table class="header">
+  <tr>
+    <!-- COLONNE GAUCHE : DRAPEAU -->
+    <td class="logo-cell left">
+      {% if drapeau_sn_base64 %}
+        <img src="data:image/png;base64,{{ drapeau_sn_base64 }}" class="logo">
+      {% endif %}
+    </td>
+
+    <!-- COLONNE CENTRALE : TITRES -->
+    <td class="header-center">
+      <div class="republique">République du Sénégal</div>
+      <div>Ministère de l’Éducation nationale</div>
+      <div class="ecole">{{ ecole }}</div>
+      <div class="annee">ANNÉE SCOLAIRE : {{ annee_scolaire }}</div>
+    </td>
+
+    <!-- COLONNE DROITE : LOGO ÉCOLE -->
+    <td class="logo-cell right">
+      {% if logo_men_base64 %}
+        <img src="data:image/png;base64,{{ logo_men_base64 }}" class="logo">
+      {% endif %}
+    </td>
+  </tr>
+</table>
+
+<!-- ================= IDENTITÉ ================= -->
+<table class="identite">
+  <tr>
+    <td>
+      <strong>Prénom :</strong> {{ eleve.prenom }}<br>
+      <strong>Nom :</strong> {{ eleve.nom }}<br>
+      <strong>Classe :</strong> {{ classe }}
+    </td>
+    <td>
+      <strong>Trimestre :</strong> {{ trimestre_label }}<br>
+      <strong>Effectif :</strong> {{ effectif }}<br>
+      <strong>Rang :</strong> {{ rang }}
+    </td>
+  </tr>
+</table>
+
+<!-- ================= TITRE ================= -->
+<div class="titre">
+  BULLETIN DU {{ trimestre_label|upper }} TRIMESTRE
+</div>
+
+<!-- ================= ÉVALUATIONS ================= -->
+<table class="notes">
+  <thead>
+    <tr>
+      <th rowspan="2">Matières</th>
+      <th colspan="2">Notes</th>
+    </tr>
+    <tr>
+      <th>Obtenu</th>
+      <th>Sur</th>
+    </tr>
+  </thead>
+    <tbody>
+        {% for mat in lignes %}
+        <!-- LIGNE MATIÈRE -->
+        <tr>
+            <td><strong>{{ mat.matiere }}</strong></td>
+            <td class="center"><strong>{{ mat.total_obtenu }}</strong></td>
+            <td class="center"><strong>{{ mat.total_max }}</strong></td>
+        </tr>
+
+        <!-- LIGNES COMPOSANTES -->
+        {% for comp in mat.composantes %}
+        <tr>
+            <td style="padding-left: 20px;">
+            – {{ comp.nom }}
+            </td>
+            <td class="center">{{ comp.obtenu }}</td>
+            <td class="center">{{ comp.max }}</td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- ================= RÉCAPITULATIF ================= -->
+<table class="recap">
+  <tr>
+    <td><strong>Total :</strong> {{ total_points }} / {{ total_max }}</td>
+    <td><strong>Moyenne :</strong> {{ moyenne_sur_10 }} / 10</td>
+    <td><strong>Rang :</strong> {{ rang }}</td>
+  </tr>
+</table>
+
+<!-- ================= OBSERVATIONS ================= -->
+<table class="observations">
+  <tr>
+    <td>
+      <strong>Appréciation générale :</strong><br><br>
+      {{ appreciation }}
+    </td>
+  </tr>
+</table>
+
+<!-- ================= SIGNATURES ================= -->
+<table class="signatures">
+  <tr>
+    <td>Le/La Maître(sse)</td>
+    <td>Le Directeur</td>
+  </tr>
+</table>
+
+<!-- <div class="date">
+  Bulletin généré le {{ bulletin.date_generation|date:"d/m/Y" }}
+</div> -->
+<footer>
+  <div class="date">
+    Bulletin généré le {{ bulletin.date_generation|date:"d/m/Y" }}
+  </div>
+</footer>
+</body>
+</html>

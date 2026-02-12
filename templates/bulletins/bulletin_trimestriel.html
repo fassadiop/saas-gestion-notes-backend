@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Bulletin trimestriel</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: Arial, Helvetica, sans-serif; color:#111; font-size: 12px; }
+    h1,h2,h3 { margin: 0; }
+    .center { text-align: center; }
+    .muted { color:#666; }
+    .spacer { height: 10px; }
+
+    .header { border-bottom: 2px solid #000; padding-bottom: 8px; }
+    .header .title { font-size: 16px; font-weight: bold; letter-spacing: .5px; }
+
+    .box { border: 1px solid #ddd; padding: 10px; border-radius: 6px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border-bottom: 1px solid #e5e5e5; padding: 6px 8px; }
+    th { text-align: left; background:#f7f7f7; }
+    td.num { text-align: right; }
+
+    .recap { display:grid; grid-template-columns: repeat(4,1fr); gap: 8px; }
+    .recap .item { border:1px solid #ddd; border-radius:6px; padding:8px; text-align:center; }
+    .recap .label { font-size:11px; color:#555; }
+    .recap .value { font-size:14px; font-weight:bold; }
+
+    .sign { display:grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 30px; }
+    .sign .line { border-top:1px solid #000; margin-top: 30px; text-align:center; padding-top:6px; }
+
+    footer { position: fixed; bottom: 0; left: 0; right: 0; font-size: 10px; color:#666; text-align:center; }
+  </style>
+</head>
+<body>
+
+  <!-- EN-TÊTE -->
+  <div class="header center">
+    <div>RÉPUBLIQUE DU SÉNÉGAL</div>
+    <div>MINISTÈRE DE L’ÉDUCATION NATIONALE</div>
+    <div class="muted">Inspection de l’Éducation et de la Formation : {{ ief }}</div>
+    <div class="spacer"></div>
+    <div class="title">ÉCOLE ÉLÉMENTAIRE {{ ecole }}</div>
+    <div class="muted">
+      Bulletin de notes — {{ trimestre_label }} — Année scolaire {{ annee_scolaire }}
+    </div>
+  </div>
+
+  <div class="spacer"></div>
+
+  <!-- IDENTITÉ -->
+  <div class="box grid-2">
+    <div>
+      <strong>Élève :</strong> {{ eleve.nom }} {{ eleve.prenom }}<br/>
+      <strong>Date de naissance :</strong> {{ eleve.date_naissance|default:"—" }}
+    </div>
+    <div>
+      <strong>Classe :</strong> {{ classe }}<br/>
+      <strong>Effectif :</strong> {{ effectif|default:"—" }}
+    </div>
+  </div>
+
+  <!-- TABLEAU DES ÉVALUATIONS -->
+  <table>
+    <thead>
+      <tr>
+        <th>Matière</th>
+        <th class="num">Points obtenus</th>
+        <th class="num">Points max</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in lignes %}
+      <tr>
+        <td>{{ row.matiere }}</td>
+        <td class="num">{{ row.points_obtenus }}</td>
+        <td class="num">{{ row.points_max }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- RÉCAP -->
+  <div class="spacer"></div>
+  <div class="recap">
+    <div class="item">
+      <div class="label">Total</div>
+      <div class="value">{{ total_points }} / {{ total_max }}</div>
+    </div>
+    <div class="item">
+      <div class="label">Moyenne</div>
+      <div class="value">{{ moyenne_sur_10 }} / 10</div>
+    </div>
+    <div class="item">
+      <div class="label">Rang</div>
+      <div class="value">{{ rang }}</div>
+    </div>
+    <div class="item">
+      <div class="label">Appréciation</div>
+      <div class="value">{{ appreciation }}</div>
+    </div>
+  </div>
+
+  <!-- OBSERVATIONS -->
+  <div class="spacer"></div>
+  <div class="box">
+    <strong>Observations générales</strong><br/>
+    {{ observation|default:"—" }}
+  </div>
+
+  <!-- SIGNATURES -->
+  <div class="sign">
+    <div class="line">Le/La Maître(sse)</div>
+    <div class="line">Le Directeur</div>
+  </div>
+
+  <footer>
+    Bulletin généré électroniquement — toute modification invalide ce document.
+  </footer>
+</body>
+</html>
