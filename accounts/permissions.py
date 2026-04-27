@@ -69,3 +69,10 @@ class IsParent(BasePermission):
             request.user.is_authenticated
             and request.user.role == "PARENT"
         )
+
+class IsAdminTenantOrSaaS(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated
+            and request.user.role in ["ADMIN_TENANT", "ADMIN_SAAS"]
+        )

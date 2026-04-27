@@ -1,24 +1,31 @@
 # config/evaluations/views.py
 
+from notifications.services import create_event
+from rest_framework.decorators import api_view
+from core.permissions import IsAdminTenantOrDirecteur
+from core.views import TenantModelViewSet
 from evaluations.serializers import BulletinParentSerializer
 from accounts.permissions import IsParent
+from django.db.models import Avg, Count, Case, When, IntegerField, Q
+from rest_framework.permissions import IsAuthenticated
+from evaluations.services.bulletins import generer_bulletin
 
 from django.forms import ValidationError
 from academics.serializers import ClasseSimpleSerializer, MatiereSimpleSerializer, ComposanteSerializer
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from rest_framework.viewsets import ModelViewSet, ViewSet
 
 from django.http import FileResponse
-from academics.models import AffectationClasse, Classe, Eleve, AffectationEnseignant, Matiere
+from academics.models import AffectationClasse, Classe, Eleve, Matiere
 from evaluations.services.pdf import generer_bulletin_pdf
-from evaluations.models import Bulletin
 from evaluations.services.bulletin_builder import build_bulletin_details
+from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Bulletin, Note, Trimestre, Validation
-from .serializers import BulletinDetailSerializer, BulletinReadSerializer, TrimestreSerializer, NoteSerializer
+from .models import Appreciation, Bulletin, Note, Trimestre, Validation, DecisionConseil
+from .serializers import AppreciationSerializer, BulletinDetailSerializer, BulletinReadSerializer, TrimestreSerializer, NoteSerializer
 from .permissions import IsDirecteurOuAdminTenant, IsEnseignant, IsDirecteur
 from .services.bulletins import generer_bulletin
 from rest_framework.viewsets import ReadOnlyModelViewSet
@@ -26,21 +33,37 @@ from .models import AnneeScolaire, Bareme, Composante
 from django.db import transaction
 from django.utils import timezone
 
-class BulletinViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Accès lecture + actions métier explicites sur les bulletins
-    """
+class BulletinViewSet(TenantModelViewSet, ReadOnlyModelViewSet):
+    queryset = Bulletin.objects.select_related(
+        "eleve",
+        "eleve__classe",
+        "trimestre",
+        "decision"
+    )
     serializer_class = BulletinReadSerializer
 
-    def get_queryset(self):
-        user = self.request.user
-        qs = Bulletin.objects.filter(tenant=user.tenant)
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
 
-        if user.role == "PARENT":
-            # À adapter plus tard : parent -> élèves
-            return qs.none()
+    filterset_fields = ["statut", "trimestre"]
 
-        return qs
+    search_fields = [
+        "eleve__nom",
+        "eleve__prenom",
+        "eleve__matricule",
+    ]
+
+    ordering_fields = [
+        "moyenne_sur_10",
+        "rang",
+        "statut",
+        "date_generation",
+    ]
+
+    ordering = ["-date_generation"]
 
     # ======================================================
     # VALIDATION ENSEIGNANT
@@ -61,18 +84,25 @@ class BulletinViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 🔥 recalcul obligatoire avant validation
-        bulletin = generer_bulletin(
-            tenant=request.user.tenant,
-            eleve=bulletin.eleve,
-            trimestre=bulletin.trimestre
-        )
+        # 🔥 recalcul
+        try:
+            bulletin = generer_bulletin(
+                tenant=request.user.tenant,
+                eleve=bulletin.eleve,
+                trimestre=bulletin.trimestre
+            )
+        except ValidationError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         bulletin.refresh_from_db()
 
-        if not bulletin.total_max or bulletin.total_max <= 0:
+        # 🔥 contrôles métier
+        if bulletin.total_max <= 0:
             return Response(
-                {"detail": "Notes non complètes."},
+                {"detail": "Barèmes non configurés ou incomplets."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -82,6 +112,7 @@ class BulletinViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # 🔥 validation
         bulletin.statut = "VALIDE_ENSEIGNANT"
         bulletin.save(update_fields=["statut"])
 
@@ -109,6 +140,7 @@ class BulletinViewSet(viewsets.ReadOnlyModelViewSet):
     @transaction.atomic
     def valider_directeur(self, request, pk=None):
         bulletin = self.get_object()
+        user = request.user
 
         if bulletin.statut != "VALIDE_ENSEIGNANT":
             return Response(
@@ -116,6 +148,29 @@ class BulletinViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # 🔥 GESTION DÉCISION
+        if bulletin.trimestre.numero == 3:
+            data = request.data.get("decision")
+
+            if not data:
+                return Response(
+                    {"detail": "Décision obligatoire pour le 3e trimestre."},
+                    status=400
+                )
+
+            DecisionConseil.objects.update_or_create(
+                bulletin=bulletin,
+                defaults={
+                    "tenant": bulletin.tenant,
+                    "decision": data.get("decision"),
+                    "mention": data.get("mention"),
+                    "commentaire": data.get("commentaire"),
+                    "autorise_examen": data.get("autorise_examen", False),
+                    "cree_par": user,
+                }
+            )
+
+        # 🔥 validation
         bulletin.statut = "VALIDE_DIRECTEUR"
         bulletin.save(update_fields=["statut"])
 
@@ -143,6 +198,12 @@ class BulletinViewSet(viewsets.ReadOnlyModelViewSet):
     @transaction.atomic
     def publier(self, request, pk=None):
         bulletin = self.get_object()
+
+        if bulletin.trimestre.numero == 3 and not hasattr(bulletin, "decision"):
+            return Response(
+                {"detail": "Décision du conseil obligatoire."},
+                status=400
+            )
 
         if bulletin.statut != "VALIDE_DIRECTEUR":
             return Response(
@@ -242,15 +303,360 @@ class BulletinViewSet(viewsets.ReadOnlyModelViewSet):
             status=status.HTTP_200_OK
         )
 
-class EnseignantTrimestreViewSet(ReadOnlyModelViewSet):
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="stats",
+        permission_classes=[IsDirecteurOuAdminTenant]
+    )
+    def stats(self, request):
+        qs = self.get_queryset()
+
+        total = qs.count()
+
+        moyenne = qs.aggregate(
+            avg=Avg("moyenne_sur_10")
+        )["avg"] or 0
+
+        publies = qs.filter(statut="PUBLIE").count()
+
+        taux_reussite = qs.filter(
+            moyenne_sur_10__gte=5
+        ).count()
+
+        return Response({
+            "moyenne_generale": round(moyenne, 2),
+            "taux_reussite": round((taux_reussite / total) * 100, 2) if total else 0,
+            "bulletins_publies": publies,
+            "effectif": total,
+        })
+    
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="stats-par-classe",
+        permission_classes=[IsDirecteurOuAdminTenant]
+    )
+    def stats_par_classe(self, request):
+        qs = self.get_queryset()
+
+        data = (
+            qs.values(
+                "eleve__classe__id",
+                "eleve__classe__nom"
+            )
+            .annotate(
+                moyenne=Avg("moyenne_sur_10"),
+                effectif=Count("id"),
+                taux_reussite=Count(
+                    Case(
+                        When(moyenne_sur_10__gte=5, then=1),
+                        output_field=IntegerField(),
+                    )
+                )
+            )
+        )
+
+        result = []
+
+        for d in data:
+            total = d["effectif"] or 0
+            reussite = d["taux_reussite"] or 0
+
+            result.append({
+                "classe_id": d["eleve__classe__id"],
+                "classe": d["eleve__classe__nom"],
+                "moyenne": round(d["moyenne"] or 0, 2),
+                "effectif": total,
+                "taux_reussite": round((reussite / total) * 100, 2) if total else 0,
+            })
+
+        return Response(result)
+    
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="alertes",
+        permission_classes=[IsDirecteurOuAdminTenant]
+    )
+    def alertes(self, request):
+        qs = self.get_queryset()
+
+        # 🔴 élèves en difficulté (< 5)
+        en_difficulte = qs.filter(moyenne_sur_10__lt=5).count()
+
+        # 🔴 bulletins non validés
+        non_valides = qs.exclude(statut="PUBLIE").count()
+
+        # 🔴 meilleurs élèves
+        excellents = qs.filter(moyenne_sur_10__gte=8).count()
+
+        return Response({
+            "eleves_en_difficulte": en_difficulte,
+            "bulletins_non_publies": non_valides,
+            "eleves_excellents": excellents,
+        })
+    
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="evolution",
+        permission_classes=[IsDirecteurOuAdminTenant]
+    )
+    def evolution(self, request):
+        qs = self.get_queryset()
+
+        data = (
+            qs.values("trimestre__numero")
+            .annotate(moyenne=Avg("moyenne_sur_10"))
+            .order_by("trimestre__numero")
+        )
+
+        return Response([
+            {
+                "trimestre": d["trimestre__numero"],
+                "moyenne": round(d["moyenne"] or 0, 2)
+            }
+            for d in data
+        ])
+    
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="top-eleves",
+        permission_classes=[IsDirecteurOuAdminTenant]
+    )
+    def top_eleves(self, request):
+        qs = self.get_queryset().select_related(
+            "eleve__classe",
+            "trimestre"
+        )
+
+        top = qs.order_by("-moyenne_sur_10")[:5]
+        flop = qs.order_by("moyenne_sur_10")[:5]
+
+        return Response({
+            "top": [
+                {
+                    "nom": b.eleve.nom,
+                    "prenom": b.eleve.prenom,
+                    "classe": b.eleve.classe.nom if b.eleve.classe else None,
+                    "trimestre": b.trimestre.numero,  # 🔥 AJOUT
+                    "moyenne": b.moyenne_sur_10,
+                } for b in top
+            ],
+            "flop": [
+                {
+                    "nom": b.eleve.nom,
+                    "prenom": b.eleve.prenom,
+                    "classe": b.eleve.classe.nom if b.eleve.classe else None,
+                    "trimestre": b.trimestre.numero,  # 🔥 AJOUT
+                    "moyenne": b.moyenne_sur_10,
+                } for b in flop
+            ]
+        })
+
+    @action(detail=False, methods=["post"], url_path="valider-masse")
+    def valider_masse(self, request):
+        ids = request.data.get("ids", [])
+
+        bulletins = self.get_queryset().filter(id__in=ids)
+
+        # 🔥 BLOQUER si T3
+        if bulletins.filter(trimestre__numero=3).exists():
+            return Response(
+                {"detail": "Utilisez la validation avec conseil pour le 3e trimestre"},
+                status=400
+            )
+
+        updated = bulletins.update(statut="VALIDE_DIRECTEUR")
+
+        return Response({"updated": updated})
+    
+    @action(detail=False, methods=["post"], url_path="valider-masse-conseil")
+    def valider_masse_conseil(self, request):
+        ids = request.data.get("ids", [])
+        decision_data = request.data.get("decision")
+
+        if not decision_data:
+            return Response(
+                {"detail": "Décision obligatoire pour le 3e trimestre"},
+                status=400
+            )
+
+        bulletins = self.get_queryset().filter(
+            id__in=ids,
+            trimestre__numero=3
+        )
+
+        updated = 0
+
+        for bulletin in bulletins:
+
+            DecisionConseil.objects.update_or_create(
+                bulletin=bulletin,
+                defaults={
+                    "tenant": bulletin.tenant,
+                    "decision": decision_data.get("decision"),
+                    "mention": decision_data.get("mention"),
+                    "commentaire": decision_data.get("commentaire"),
+                    "cree_par": request.user,
+                }
+            )
+
+            bulletin.statut = "VALIDE_DIRECTEUR"
+            bulletin.save()
+
+            updated += 1
+
+        return Response({"updated": updated})
+
+    # @action(detail=False, methods=["post"], url_path="valider-masse")
+    # def valider_masse(self, request):
+    #     ids = request.data.get("ids", [])
+
+    #     bulletins = self.get_queryset().filter(id__in=ids)
+
+    #     updated = 0
+
+    #     for bulletin in bulletins:
+
+    #         if bulletin.trimestre.numero == 3:
+    #             decision_data = request.data.get("decision")
+
+    #             if not decision_data:
+    #                 return Response(
+    #                     {"detail": "Décision obligatoire pour le 3e trimestre"},
+    #                     status=400
+    #                 )
+
+    #             DecisionConseil.objects.update_or_create(
+    #                 bulletin=bulletin,
+    #                 defaults={
+    #                     "tenant": bulletin.tenant,
+    #                     "decision": decision_data.get("decision"),
+    #                     "mention": decision_data.get("mention"),
+    #                     "commentaire": decision_data.get("commentaire"),
+    #                     "cree_par": request.user,
+    #                 }
+    #             )
+
+    #         bulletin.statut = "VALIDE_DIRECTEUR"
+    #         bulletin.save()
+
+    #         updated += 1
+
+    #     return Response({
+    #         "updated": updated
+    #     })
+
+
+    @action(detail=False, methods=["post"], url_path="publier-masse")
+    def publier_masse(self, request):
+        ids = request.data.get("ids", [])
+
+        bulletins = self.get_queryset().filter(id__in=ids)
+
+        updated = bulletins.update(statut="PUBLIE")
+
+        return Response({
+            "updated": updated
+        })
+    
+    @action(detail=True, methods=["post"])
+    def definir_decision(self, request, pk=None):
+        bulletin = self.get_object()
+        user = request.user
+
+        if user.role != "DIRECTEUR":
+            return Response({"error": "Accès refusé"}, status=403)
+
+        if bulletin.trimestre.numero != 3:
+            return Response({"error": "Seulement 3e trimestre"}, status=400)
+
+        if bulletin.statut != "VALIDE_DIRECTEUR":
+            return Response({"error": "Bulletin non validé"}, status=400)
+
+        data = request.data
+
+        decision_obj, _ = DecisionConseil.objects.update_or_create(
+            bulletin=bulletin,
+            defaults={
+                "tenant": bulletin.tenant,
+                "decision": data.get("decision"),
+                "mention": data.get("mention"),
+                "commentaire": data.get("commentaire"),
+                "autorise_examen": data.get("autorise_examen", False),
+                "cree_par": user,
+            }
+        )
+
+        return Response({"success": True})
+
+class TrimestreViewSet(TenantModelViewSet):
+    queryset = Trimestre.objects.all()
     serializer_class = TrimestreSerializer
-    permission_classes = [IsEnseignant]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Trimestre.objects.filter(
-            tenant=self.request.user.tenant,
-            annee__actif=True
-        )
+        user = self.request.user
+
+        qs = Trimestre.objects.all()
+
+        if not (user.is_superuser or getattr(user, "role", None) == "ADMIN_SAAS"):
+            qs = qs.filter(tenant=user.tenant)
+
+        return qs.filter(annee__actif=True).order_by("numero")
+
+    def perform_create(self, serializer):
+        user = self.request.user
+
+        if user.is_superuser or getattr(user, "role", None) == "ADMIN_SAAS":
+            tenant = serializer.validated_data.get("tenant")
+
+            if not tenant:
+                raise ValidationError("Tenant requis")
+
+            serializer.save(tenant=tenant)
+        else:
+            serializer.save(tenant=user.tenant)
+
+    @action(detail=True, methods=["post"])
+    def activer(self, request, pk=None):
+        trimestre = self.get_object()
+
+        if trimestre.cloture:
+            return Response(
+                {"error": "Impossible d’activer un trimestre clôturé"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # désactiver tous les autres trimestres de la même année
+        Trimestre.objects.filter(
+            tenant=trimestre.tenant,
+            annee=trimestre.annee
+        ).update(actif=False)
+
+        trimestre.actif = True
+        trimestre.save()
+
+        return Response({"status": "trimestre activé"})
+    
+    @action(detail=True, methods=["post"])
+    def cloturer(self, request, pk=None):
+        trimestre = self.get_object()
+
+        if trimestre.cloture:
+            return Response(
+                {"error": "Ce trimestre est déjà clôturé"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        trimestre.cloture = True
+        trimestre.actif = False
+        trimestre.save()
+
+        return Response({"status": "trimestre clôturé"})
 
 
 class EnseignantComposanteViewSet(ReadOnlyModelViewSet):
@@ -323,12 +729,12 @@ class EnseignantNoteViewSet(ModelViewSet):
         )
 
         # recalcul SANS changer le statut
-        generer_bulletin(
-            tenant=request.user.tenant,
-            eleve=eleve,
-            trimestre=trimestre,
-            lecture_seule=True
-        )
+        # generer_bulletin(
+        #     tenant=request.user.tenant,
+        #     eleve=eleve,
+        #     trimestre=trimestre,
+        #     lecture_seule=True
+        # )
 
         annee = eleve.classe.annee
 
@@ -347,7 +753,7 @@ class EnseignantNoteViewSet(ModelViewSet):
         notes_map = {n.composante_id: n for n in notes}
 
         lignes = []
-        note_directe = None
+        notes_directes = []
         for b in baremes:
 
             # =========================
@@ -376,18 +782,18 @@ class EnseignantNoteViewSet(ModelViewSet):
                     matiere=b.matiere
                 ).first()
 
-                note_directe = {
+                notes_directes.append({
                     "matiere_id": b.matiere.id,
                     "matiere_nom": b.matiere.nom,
                     "valeur": note.valeur if note else None,
                     "valeur_max": b.valeur_max,
-                }
+                })
 
         return Response({
             "bulletin_id": bulletin.id,
             "statut": bulletin.statut,
             "notes": lignes,
-            "note_directe": note_directe,
+            "note_directe": notes_directes,
         })
 
     def perform_create(self, serializer):
@@ -507,6 +913,16 @@ class EnseignantNoteViewSet(ModelViewSet):
         try:
             note.full_clean()
             note.save()
+
+            # 🔥 DÉCLENCHEMENT ÉVÉNEMENT (SEULEMENT SI CRÉATION)
+            if created:
+                create_event(
+                    type="NOTE_AJOUTEE",
+                    reference_id=note.eleve_id,
+                    reference_type="NOTE",
+                    tenant_id=note.tenant_id  # OK même si on ne s’en sert plus vraiment
+                )
+                
         except ValidationError as e:
             return Response(
                 {"detail": e.message_dict or e.messages},
@@ -615,30 +1031,82 @@ class ParentBulletinViewSet(ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        # 🔐 Sécurité : uniquement pour les parents
         if user.role != "PARENT":
             return Bulletin.objects.none()
 
-        # Parent lié à l'utilisateur
-        parent = user.parent_profile  # OneToOne
+        parent = user.parent_profile
 
-        # Élèves associés au parent
-        eleves = parent.eleves.all()
+        # 🔒 sécurité : vérifier tenant
+        tenant = user.tenant
 
-        # Bulletins des élèves du parent
+        eleves = parent.eleves.filter(tenant=tenant)
+        print("ELEVE IDS:", eleves.values_list("id", flat=True))
         return Bulletin.objects.filter(
             eleve__in=eleves,
-            statut="PUBLIE",  # important : le parent ne voit que les bulletins publiés
-        ).select_related("eleve", "eleve__classe", "trimestre")
+            eleve__tenant=tenant,
+            tenant=tenant,
+            statut="PUBLIE",
+        ).select_related(
+            "eleve",
+            "eleve__classe",
+            "trimestre"
+        )
 
     @action(detail=True, methods=["get"])
     def pdf(self, request, pk=None):
         bulletin = self.get_object()
 
+        # 🔥 RECONSTRUIRE LE BULLETIN PROPREMENT (même logique que directeur)
+        bulletin = generer_bulletin(
+            tenant=bulletin.tenant,
+            eleve=bulletin.eleve,
+            trimestre=bulletin.trimestre,
+            lecture_seule=True  # 🔥 IMPORTANT
+        )
+
         path = generer_bulletin_pdf(bulletin=bulletin)
+
+        if bulletin.statut != "PUBLIE":
+            return Response({"error": "Bulletin non disponible"}, status=403)
 
         return FileResponse(
             open(path, "rb"),
             content_type="application/pdf",
             filename=f"bulletin_{bulletin.id}.pdf",
+        )
+
+@api_view(["GET"])
+def verify_bulletin(request, token):
+    try:
+        bulletin = Bulletin.objects.select_related(
+            "eleve", "tenant", "trimestre"
+        ).get(verification_token=token)
+
+        return Response({
+            "valide": True,
+            "eleve": f"{bulletin.eleve.prenom} {bulletin.eleve.nom}",
+            "classe": str(bulletin.eleve.classe),
+            "ecole": bulletin.tenant.nom,
+            "moyenne": bulletin.moyenne_sur_10,
+            "rang": bulletin.rang,
+            "statut": bulletin.statut,
+        })
+
+    except Bulletin.DoesNotExist:
+        return Response({"valide": False}, status=404)
+    
+
+class AppreciationViewSet(TenantModelViewSet):
+    queryset = Appreciation.objects.all()
+    serializer_class = AppreciationSerializer
+    permission_classes = [IsAuthenticated, IsAdminTenantOrDirecteur]
+
+    def get_queryset(self):
+        return Appreciation.objects.filter(
+            tenant=self.request.user.tenant
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(
+            tenant=self.request.user.tenant
         )

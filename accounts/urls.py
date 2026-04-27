@@ -1,10 +1,13 @@
-from django.urls import path
-from accounts.views import ChangePasswordView, DirecteurParentViewSet
-from rest_framework.routers import DefaultRouter
+# config/accounts/urls.py
 
-urlpatterns = [
-    path("change-password/", ChangePasswordView.as_view(), name="change-password"),
-]
+from django.urls import path
+from accounts.views import (
+    AdminTenantViewSet,
+    ChangePasswordView,
+    DirecteurParentViewSet,
+    ParentDashboardView,
+)
+from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
 router.register(
@@ -12,5 +15,12 @@ router.register(
     DirecteurParentViewSet,
     basename="directeur-parents"
 )
+router.register("admin-tenants", AdminTenantViewSet, basename="admin-tenants")
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("dashboard/", ParentDashboardView.as_view()),
+    path("change-password/", ChangePasswordView.as_view(), name="change-password"),
+]
+
+# 🔥 fusion des routes
+urlpatterns += router.urls

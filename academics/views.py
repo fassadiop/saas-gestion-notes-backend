@@ -1,7 +1,19 @@
 # academics/views.py
 
+import mimetypes
+from django.http import FileResponse, Http404
+from django.utils import timezone
+
+from django.http import FileResponse
+from rest_framework import status
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.viewsets import ModelViewSet
+
+from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.conf import settings
 from rest_framework.response import Response
+from accounts import models
 from accounts.permissions import IsAdminTenant, IsEnseignant
 from rest_framework.decorators import action
 from rest_framework import status
@@ -9,55 +21,27 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 
+from core.models import Message
 from core.permissions import IsAdminTenantOrDirecteur
-from .models import AffectationClasse, AnneeScolaire, Eleve, Classe, Matiere, AffectationEnseignant, Bareme, Composante
-from .serializers import AffectationClasseSerializer, AnneeScolaireSerializer, EleveSerializer, ClasseSerializer, ComposanteSerializer, ClasseDashboardSerializer
+from core.views import TenantModelViewSet
+from evaluations.models import Note
+from .models import AffectationClasse, AnneeScolaire, DocumentEleve, Eleve, Classe, Inscription, Matiere, AffectationEnseignant, Bareme, Composante
+from .serializers import AffectationClasseSerializer, AnneeScolaireSerializer, DocumentEleveSerializer, EleveSerializer, ClasseSerializer, ComposanteSerializer, ClasseDashboardSerializer, InscriptionCreateSerializer, InscriptionDetailSerializer, InscriptionListSerializer
 from accounts.models import User
 from academics.serializers import MatiereSerializer, BaremeSerializer
 from .services.affectations import est_enseignant_affecte_a_classe
 from rest_framework.exceptions import ValidationError
+from rest_framework.filters import SearchFilter, OrderingFilter
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.exceptions import PermissionDenied
+
+from django.db.models import Avg, Count, Q, F, FloatField, ExpressionWrapper, OuterRef, Subquery
 
 
-class TenantFilteredViewSet(ModelViewSet):
-    """
-    Base ViewSet SaaS :
-    - filtre automatiquement par tenant
-    - injecte le tenant à la création
-    """
-
-    def get_queryset(self):
-        qs = super().get_queryset()
-        if self.request.user.role == "ADMIN_SAAS":
-            return qs
-        return qs.filter(tenant=self.request.tenant)
-
-    def perform_create(self, serializer):
-        if self.request.user.role != "ADMIN_SAAS":
-            serializer.save(tenant=self.request.tenant)
-        else:
-            serializer.save()
-
-class TenantScopedViewSet(ModelViewSet):
-    """
-    Base ViewSet pour données métiers tenant-scopées
-    """
-
-    def get_queryset(self):
-        user = self.request.user
-        return self.queryset.filter(tenant=user.tenant)
-
-    def perform_create(self, serializer):
-        serializer.save(tenant=self.request.user.tenant)
-
-class ClasseViewSet(TenantScopedViewSet):
+class ClasseViewSet(TenantModelViewSet):
     queryset = Classe.objects.select_related("annee")
     serializer_class = ClasseSerializer
     permission_classes = [IsAuthenticated, IsAdminTenantOrDirecteur]
-
-    def get_queryset(self):
-        return Classe.objects.filter(
-            tenant=self.request.user.tenant
-        ).select_related("annee")
 
     def perform_create(self, serializer):
         serializer.save(
@@ -79,16 +63,27 @@ class ClasseViewSet(TenantScopedViewSet):
         return Response({"status": "inactive"}, status=200)
 
 
-class EleveViewSet(TenantScopedViewSet):
+class EleveViewSet(TenantModelViewSet):
     serializer_class = EleveSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        qs = Eleve.objects.filter(tenant=user.tenant)
+
+        qs = Eleve.objects.filter(
+            tenant=user.tenant,
+            actif=True  # 🔥 si soft delete
+        )
+
+        # 🔥 retrieve → accès direct
+        if self.action == "retrieve":
+            return qs
 
         classe_id = self.request.query_params.get("classe")
 
+        # =========================
+        # CAS ENSEIGNANT
+        # =========================
         if user.role == "ENSEIGNANT":
             if not classe_id:
                 return Eleve.objects.none()
@@ -100,12 +95,38 @@ class EleveViewSet(TenantScopedViewSet):
             ):
                 return Eleve.objects.none()
 
-            return qs.filter(classe_id=classe_id)
+            return qs.filter(
+                inscriptions__classe_id=classe_id,
+                inscriptions__actif=True
+            ).distinct()
 
+        # =========================
+        # AUTRES ROLES
+        # =========================
         if classe_id:
-            return qs.filter(classe_id=classe_id)
+            return qs.filter(
+                inscriptions__classe_id=classe_id,
+                inscriptions__actif=True
+            ).distinct()
 
         return qs
+    
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        user = request.user
+
+        # 🔐 sécurité enseignant
+        if user.role == "ENSEIGNANT":
+            if not est_enseignant_affecte_a_classe(
+                enseignant=user,
+                classe_id=instance.classe_id,
+                tenant=user.tenant,
+            ):
+                return Response(status=403)
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
 
 
 class AdminTenantDashboardView(APIView):
@@ -133,7 +154,7 @@ class AdminTenantDashboardView(APIView):
 
         return Response(data)
 
-class AnneeScolaireViewSet(TenantScopedViewSet):
+class AnneeScolaireViewSet(TenantModelViewSet):
     queryset = AnneeScolaire.objects.all()
     serializer_class = AnneeScolaireSerializer
     permission_classes = [IsAuthenticated]
@@ -142,18 +163,16 @@ class AnneeScolaireViewSet(TenantScopedViewSet):
     def activer(self, request, pk=None):
         annee = self.get_object()
 
-        # Désactiver toutes les autres années du tenant
-        AnneeScolaire.objects.filter(
-            tenant=request.user.tenant
-        ).exclude(id=annee.id).update(actif=False)
+        # 🔥 transaction = cohérence
+        with transaction.atomic():
+            AnneeScolaire.objects.filter(
+                tenant=request.user.tenant
+            ).update(actif=False)
 
-        annee.actif = True
-        annee.save(update_fields=["actif"])
+            annee.actif = True
+            annee.save(update_fields=["actif"])
 
-        return Response(
-            {"status": "annee activee"},
-            status=status.HTTP_200_OK
-        )
+        return Response({"status": "annee activee"})
 
     @action(detail=True, methods=["post"])
     def desactiver(self, request, pk=None):
@@ -165,6 +184,22 @@ class AnneeScolaireViewSet(TenantScopedViewSet):
             {"status": "annee desactivee"},
             status=status.HTTP_200_OK
         )
+
+    @action(detail=False, methods=["get"])
+    def active(self, request):
+        annee = AnneeScolaire.objects.filter(
+            tenant=request.user.tenant,
+            actif=True
+        ).first()
+
+        if not annee:
+            return Response(
+                {"detail": "Aucune année active"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = self.get_serializer(annee)
+        return Response(serializer.data)
 
 
 
@@ -286,34 +321,7 @@ class TenantMatiereViewSet(ModelViewSet):
         matiere.actif = False
         matiere.save(update_fields=["actif"])
         return Response({"status": "inactive"}, status=200)
-
-# class TenantBaremeViewSet(ModelViewSet):
-#     serializer_class = BaremeSerializer
-#     permission_classes = [IsAdminTenantOrDirecteur]
-
-#     def get_queryset(self):
-#         return (
-#             Bareme.objects.filter(
-#                 tenant=self.request.user.tenant
-#             )
-#             .select_related(
-#                 "classe",
-#                 "annee",
-#                 "composante",
-#                 "composante__matiere",
-#             )
-#         )
-
-#     def perform_create(self, serializer):
-#         serializer.save(tenant=self.request.user.tenant)
-
-#     def perform_destroy(self, instance):
-#         # 🔒 Interdiction si des notes existent
-#         if instance.composante.note_set.exists():
-#             raise ValidationError(
-#                 "Impossible de supprimer un barème utilisé."
-#             )
-#         instance.delete()
+    
 
 class TenantBaremeViewSet(ModelViewSet):
     serializer_class = BaremeSerializer
@@ -408,6 +416,17 @@ class TenantBaremeViewSet(ModelViewSet):
         if not created:
             bareme.valeur_max = valeur_max
             bareme.save(update_fields=["valeur_max"])
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        instance = serializer.save(tenant=request.user.tenant)
+
+        # 🔥 on sérialise UNE VRAIE INSTANCE
+        output_serializer = self.get_serializer(instance)
+
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
 
 
@@ -534,15 +553,20 @@ class EnseignantDashboardView(APIView):
         if not annee:
             return Response({"classes": []})
 
+        # -------------------------
+        # 1. AFFECTATIONS
+        # -------------------------
         affectations = (
-            AffectationEnseignant.objects
+            AffectationClasse.objects
             .filter(
                 enseignant=user,
                 annee=annee,
                 tenant=user.tenant
             )
-            .select_related("classe", "matiere")
+            .select_related("classe")
         )
+        
+        classes_ids = affectations.values_list("classe_id", flat=True).distinct()
 
         classes_map = {}
 
@@ -551,20 +575,179 @@ class EnseignantDashboardView(APIView):
             if cid not in classes_map:
                 classes_map[cid] = {
                     "id": aff.classe.id,
-                    "nom": aff.classe.libelle,
+                    "nom": aff.classe.nom,
                     "niveau": aff.classe.niveau,
                     "matieres": [],
                 }
 
-            classes_map[cid]["matieres"].append(aff.matiere.nom_matiere)
+            classes_map[cid]["matieres"].append("Non défini")
 
+        # -------------------------
+        # 2. ÉLÈVES
+        # -------------------------
+        eleves = Eleve.objects.filter(
+            inscriptions__classe_id__in=classes_ids,
+            inscriptions__actif=True,
+            tenant=user.tenant
+        ).distinct()
+
+        total_eleves = eleves.count()
+
+        # Répartition F/G
+        repartition = {
+            "garcons": eleves.filter(sexe="M").count(),
+            "filles": eleves.filter(sexe="F").count(),
+        }
+
+        # -------------------------
+        # 3. NOTES & MOYENNES
+        # -------------------------
+        notes = Note.objects.filter(
+            eleve__inscriptions__classe_id__in=classes_ids,
+            eleve__inscriptions__actif=True,
+            tenant=user.tenant
+        )
+
+        bareme_subquery = Bareme.objects.filter(
+            composante=OuterRef("composante"),
+            classe__in=classes_ids,
+            annee=annee,
+            tenant=user.tenant
+        ).values("valeur_max")[:1]
+
+        notes_normalisees = notes.annotate(
+            valeur_max=Subquery(bareme_subquery),
+        ).filter(valeur_max__gt=0).annotate(
+            note_sur_10=ExpressionWrapper(
+                (F("valeur") * 10.0) / F("valeur_max"),
+                output_field=FloatField()
+            )
+        )
+
+        moyenne_classe = notes_normalisees.aggregate(
+            moy=Avg("note_sur_10")
+        )["moy"] or 0
+
+        eleves_moyennes = (
+            notes_normalisees
+            .values("eleve_id", "eleve__nom", "eleve__prenom")
+            .annotate(moyenne=Avg("note_sur_10"))
+            .filter(moyenne__isnull=False)
+        )
+
+        # Top 5
+        eleves_moyennes = eleves_moyennes.filter(moyenne__isnull=False)
+        top5 = eleves_moyennes.order_by("-moyenne")[:5]
+
+        # -------------------------
+        # ANALYSE PÉDAGOGIQUE
+        # -------------------------
+
+        seuil_critique = 5
+        seuil_risque = 6
+
+        # 🔴 Élèves en difficulté
+        en_difficulte = eleves_moyennes.filter(
+            moyenne__lt=seuil_critique
+        ).order_by("moyenne")[:5]
+
+        # 🟠 À surveiller
+        a_surveiller = eleves_moyennes.filter(
+            moyenne__gte=seuil_critique,
+            moyenne__lt=seuil_risque
+        ).order_by("moyenne")[:5]
+
+        # ⚫ Sans notes
+        eleves_avec_notes_ids = eleves_moyennes.values_list("eleve_id", flat=True)
+
+        sans_notes = eleves.exclude(id__in=eleves_avec_notes_ids)
+
+        sans_notes_list = list(
+            sans_notes.values(
+                "id",
+                "nom",
+                "prenom"
+            )
+        )
+
+        # -------------------------
+        # TAUX DE RÉUSSITE (FIX)
+        # -------------------------
+
+        total = eleves_moyennes.count() or 1
+
+        reussite = eleves_moyennes.filter(
+            moyenne__gte=seuil_critique
+        ).count()
+
+        taux_reussite = (reussite / total) * 100
+
+        # -------------------------
+        # 4. ÉVOLUTION MOYENNE
+        # -------------------------
+        evolution = list(
+            notes_normalisees
+            .values("trimestre__numero")
+            .annotate(moyenne=Avg("note_sur_10"))
+            .order_by("trimestre__numero")
+        )
+
+        # -------------------------
+        # 5. MESSAGES
+        # -------------------------
+        messages = Message.objects.filter(
+            Q(type="DIRECTION") |
+            Q(classe_id__in=classes_ids),
+            tenant=user.tenant
+        ).order_by("-created_at")[:5]
+
+        # -------------------------
+        # 6. SERIALIZATION SIMPLE
+        # -------------------------
         serializer = ClasseDashboardSerializer(
             classes_map.values(), many=True
         )
 
         return Response({
-            "enseignant": user.get_full_name(),
-            "classes": serializer.data
+            "enseignant": f"{user.first_name} {user.last_name}",
+            "classes": serializer.data,
+
+            "total_eleves": total_eleves,
+            "moyenne_classe": round(moyenne_classe, 2),
+            "taux_reussite": round(taux_reussite, 1),
+
+            "repartition": repartition,  # ✔️ FIX
+
+            "top5": list(
+                top5.values(
+                    "eleve_id",
+                    "eleve__nom",
+                    "eleve__prenom",
+                    "moyenne"
+                )
+            ),
+            "en_difficulte": list(
+                en_difficulte.values(
+                    "eleve_id",
+                    "eleve__nom",
+                    "eleve__prenom",
+                    "moyenne"
+                )
+            ),
+
+            "a_surveiller": list(
+                a_surveiller.values(
+                    "eleve_id",
+                    "eleve__nom",
+                    "eleve__prenom",
+                    "moyenne"
+                )
+            ),
+
+            "sans_notes": sans_notes_list,
+
+            "evolution": list(evolution),
+            "messages": list(messages.values("id", "titre", "contenu", "type")),
         })
 
 
@@ -605,4 +788,181 @@ class ElevesClasseEnseignantView(APIView):
 
         return Response(data, status=status.HTTP_200_OK)
 
+
+class InscriptionViewSet(ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    filter_backends = [
+        DjangoFilterBackend,
+        SearchFilter,
+        OrderingFilter
+    ]
+    filterset_fields = ["classe", "annee", "actif"]
+    search_fields = ["eleve__nom", "eleve__prenom"]
+    ordering_fields = ["date_inscription"]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        return Inscription.objects.filter(
+            tenant=user.tenant
+        ).select_related(
+            "eleve",
+            "classe",
+            "annee"
+        ).prefetch_related(
+            "eleve__parents",
+            "eleve__parents__user",
+        ).order_by("-date_inscription", "-id")
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return InscriptionCreateSerializer
+
+        if self.action == "retrieve":
+            return InscriptionDetailSerializer
+
+        return InscriptionListSerializer
+
+    def perform_create(self, serializer):
+        # 🔒 contrôle rôle
+        if self.request.user.role not in ["ADMIN_TENANT", "DIRECTEUR"]:
+            raise PermissionDenied("Action non autorisée")
+
+        serializer.save(tenant=self.request.user.tenant)
+
+    def perform_destroy(self, instance):
+        # 🔒 éviter suppression brute (historique important)
+        raise PermissionDenied("Suppression interdite. Désactivez l'inscription.")
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+
+        # Autoriser uniquement la désactivation
+        if "actif" in serializer.validated_data:
+            serializer.save()
+        else:
+            raise PermissionDenied("Modification interdite")
+        
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+
+        response.data["message"] = "Inscription réussie"
+
+        return response
+    
+
+class DocumentEleveViewSet(ModelViewSet):
+    queryset = DocumentEleve.objects.all()
+    serializer_class = DocumentEleveSerializer
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        if user.role == "PARENT":
+            return DocumentEleve.objects.filter(parent=user.parent_profile)
+
+        elif user.role == "DIRECTEUR":
+            return DocumentEleve.objects.filter(tenant=user.tenant)
+
+        return DocumentEleve.objects.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        eleve = serializer.validated_data["eleve"]
+        file_obj = self.request.FILES.get("fichier")
+
+        # 🔒 Vérification métier (critique)
+        if user.role == "PARENT":
+            if not hasattr(user, "parent_profile"):
+                raise PermissionDenied("Profil parent introuvable")
+
+            parent = user.parent_profile
+
+            if not parent.eleves.filter(id=eleve.id).exists():
+                raise PermissionDenied("Cet élève ne vous appartient pas")
+
+        else:
+            raise PermissionDenied("Seuls les parents peuvent uploader")
+
+        serializer.save(
+            parent=user.parent_profile,
+            tenant=user.tenant,
+            nom_original=file_obj.name if file_obj else "",
+        )
+
+    def get_content_type(self, obj):
+        try:
+            return obj.fichier.file.content_type
+        except:
+            type_guess, _ = mimetypes.guess_type(obj.fichier.name)
+            return type_guess
+
+    @action(detail=True, methods=["get"])
+    def download(self, request, pk=None):
+        document = self.get_object()
+        user = request.user
+
+        # 🔒 RBAC (inchangé)
+        if user.role == "PARENT":
+            if document.parent != user.parent_profile:
+                raise PermissionDenied("Accès refusé")
+        elif user.role == "DIRECTEUR":
+            if document.tenant != user.tenant:
+                raise PermissionDenied("Accès refusé")
+        else:
+            raise PermissionDenied("Accès refusé")
+
+        if not document.fichier:
+            raise Http404("Fichier introuvable")
+
+        preview = request.query_params.get("preview", "false")
+
+        # ✅ Détection fiable du type MIME
+        content_type, _ = mimetypes.guess_type(document.fichier.name)
+
+        return FileResponse(
+            document.fichier.open("rb"),
+            as_attachment=(preview != "true"),
+            filename=document.nom_original or document.fichier.name,
+            content_type=content_type or "application/octet-stream",
+        )
+    
+    @action(detail=True, methods=["post"])
+    def valider(self, request, pk=None):
+        document = self.get_object()
+        user = request.user
+
+        if user.role != "DIRECTEUR":
+            raise PermissionDenied("Seul le directeur peut valider")
+
+        if document.tenant != user.tenant:
+            raise PermissionDenied("Accès refusé")
+
+        document.statut = "VALIDE"
+        document.valide_par = user
+        document.date_validation = timezone.now()
+        document.save()
+
+        return Response({"status": "document validé"})
+    
+    @action(detail=True, methods=["post"])
+    def rejeter(self, request, pk=None):
+        document = self.get_object()
+        user = request.user
+
+        if user.role != "DIRECTEUR":
+            raise PermissionDenied("Seul le directeur peut rejeter")
+
+        if document.tenant != user.tenant:
+            raise PermissionDenied("Accès refusé")
+
+        document.statut = "REJETE"
+        document.valide_par = user
+        document.date_validation = timezone.now()
+        document.save()
+
+        return Response({"status": "document rejeté"})
+    
 
