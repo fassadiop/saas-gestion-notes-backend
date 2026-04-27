@@ -1,10 +1,21 @@
+# config/academics/models.py
+
+import uuid
+import os
+from core.models import TenantModel
+from django.conf import settings
 from django.db import models
 from django.forms import ValidationError
-from config import settings
-from core.models import TenantModel, Tenant
-from rest_framework import serializers
+from core.models import Departement, TenantModel, Tenant
+from django.db.models import Q
 
 class Classe(TenantModel):
+
+    NIVEAU_SYSTEME = (
+        ("ELEMENTAIRE", "Élémentaire"),
+        ("COLLEGE", "Collège"),
+        ("LYCEE", "Lycée"),
+    )
     annee = models.ForeignKey(
         "academics.AnneeScolaire",
         on_delete=models.CASCADE,
@@ -12,6 +23,11 @@ class Classe(TenantModel):
     )
     nom = models.CharField(max_length=50)
     niveau = models.CharField(max_length=20)
+    niveau_systeme = models.CharField(
+        max_length=20,
+        choices=NIVEAU_SYSTEME,
+        default="ELEMENTAIRE"
+    )
     effectif_prevu = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -26,6 +42,12 @@ class Eleve(TenantModel):
         on_delete=models.PROTECT,
         related_name="eleves"
     )
+    ine = models.CharField(
+        max_length=20,
+        unique=True,
+        null=True,
+        blank=True
+    )
     matricule = models.CharField(max_length=30)
     nom = models.CharField(max_length=100)
     prenom = models.CharField(max_length=100)
@@ -34,6 +56,15 @@ class Eleve(TenantModel):
         max_length=1,
         choices=(("M", "Masculin"), ("F", "Féminin"))
     )
+
+    departement = models.ForeignKey(
+        Departement,
+        on_delete=models.PROTECT,
+        related_name="eleves",
+        null=True,
+        blank=True
+    )
+
     actif = models.BooleanField(default=True)
 
     class Meta:
@@ -114,16 +145,6 @@ class Bareme(models.Model):
     )
 
     valeur_max = models.PositiveIntegerField()
-
-    def clean(self):
-        if self.matiere and self.composante:
-            raise ValidationError(
-                "Un barème ne peut pas être lié à une matière ET une composante."
-            )
-        if not self.matiere and not self.composante:
-            raise ValidationError(
-                "Un barème doit être lié soit à une matière soit à une composante."
-            )
     class Meta:
             constraints = [
                 # 🔒 PAR_COMPOSANTE
@@ -139,6 +160,20 @@ class Bareme(models.Model):
                     name="uniq_bareme_par_matiere",
                 ),
             ]
+
+    def clean(self):
+        if self.matiere and self.composante:
+            raise ValidationError(
+                "Un barème ne peut pas être lié à une matière ET une composante."
+            )
+        if not self.matiere and not self.composante:
+            raise ValidationError(
+                "Un barème doit être lié soit à une matière soit à une composante."
+            )
+        
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
 class AnneeScolaire(TenantModel):
     libelle = models.CharField(max_length=9)  # ex: 2024-2025
@@ -210,16 +245,33 @@ class AffectationEnseignant(models.Model):
     )
 
     class Meta:
-        unique_together = (
-            "enseignant",
-            "classe",
-            "matiere",
-            "annee",
-            "tenant",
-        )
+        constraints = [
+            models.UniqueConstraint(
+                fields=["enseignant", "classe", "matiere", "annee", "tenant"],
+                name="uniq_affect_ens"  # <= 30
+            ),
+        ]
+
+        indexes = [
+            models.Index(
+                fields=["enseignant", "classe", "tenant"],
+                name="idx_affect_ens_cls_tnt"
+            ),
+            models.Index(
+                fields=["matiere", "classe", "tenant"],
+                name="idx_affect_mat_cls_tnt"
+            ),
+        ]
 
     def __str__(self):
         return f"{self.enseignant} - {self.classe} - {self.matiere}"
+    
+    def clean(self):
+        if self.classe.tenant != self.tenant:
+            raise ValidationError("Tenant incohérent")
+
+        if self.annee and self.annee.tenant != self.tenant:
+            raise ValidationError("Année invalide")
 
 
 class Inscription(models.Model):
@@ -249,9 +301,136 @@ class Inscription(models.Model):
 
     date_inscription = models.DateField(auto_now_add=True)
     actif = models.BooleanField(default=True)
-
+    
     class Meta:
         unique_together = ("eleve", "annee", "tenant")
+        ordering = ["-date_inscription"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["eleve", "annee"],
+                condition=Q(actif=True),
+                name="unique_active_inscription_per_eleve"
+            )
+        ]
+
+        indexes = [
+            models.Index(fields=["tenant", "annee"]),
+            models.Index(fields=["eleve", "actif"]),
+        ]
 
     def __str__(self):
         return f"{self.eleve} - {self.annee}"
+
+    def save(self, *args, **kwargs):
+        if not self.tenant:
+            raise ValueError("Tenant obligatoire")
+        super().save(*args, **kwargs)
+
+
+def upload_path(instance, filename):
+    ext = filename.split('.')[-1]
+    new_name = f"{uuid.uuid4()}.{ext}"
+    return f"tenant_{instance.tenant_id}/eleves/{instance.eleve_id}/{new_name}"
+
+
+class DocumentEleve(TenantModel):
+    TYPE_CHOICES = (
+        ("ACTE", "Acte de naissance"),
+        ("CERTIFICAT", "Certificat médical"),
+        ("PHOTO", "Photo identité"),
+        ("AUTRE", "Autre"),
+    )
+
+    STATUT_CHOICES = (
+        ("EN_ATTENTE", "En attente"),
+        ("VALIDE", "Validé"),
+        ("REJETE", "Rejeté"),
+    )
+
+    eleve = models.ForeignKey(
+        "academics.Eleve",
+        on_delete=models.CASCADE,
+        related_name="documents"
+    )
+
+    parent = models.ForeignKey(
+        "accounts.Parent",
+        on_delete=models.CASCADE,
+        related_name="documents"
+    )
+
+    titre = models.CharField(max_length=255)
+
+    nom_original = models.CharField(
+        max_length=255,
+        blank=True
+    )
+
+    fichier = models.FileField(
+        upload_to=upload_path
+    )
+
+    type_document = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES
+    )
+
+    extension = models.CharField(
+        max_length=10,
+        blank=True
+    )
+
+    statut = models.CharField(
+        max_length=20,
+        choices=STATUT_CHOICES,
+        default="EN_ATTENTE"
+    )
+
+    valide_par = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="documents_valides"
+    )
+
+    date_validation = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    date_upload = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    class Meta:
+        ordering = ["-date_upload"]
+        indexes = [
+            models.Index(fields=["tenant"]),
+            models.Index(fields=["eleve"]),
+            models.Index(fields=["parent"]),
+        ]
+
+    def clean(self):
+        # Sécurité métier : vérifier que le parent est bien lié à l'élève
+        if not self.parent.eleves.filter(id=self.eleve.id).exists():
+            raise ValidationError("Cet élève n'est pas lié à ce parent")
+
+    def save(self, *args, **kwargs):
+        # 🔒 Validation métier
+        self.clean()
+
+        # 🔥 Extraction des métadonnées fichier
+        if self.fichier:
+            filename = self.fichier.name
+            self.extension = os.path.splitext(filename)[1].replace(".", "").lower()
+
+            # garder le vrai nom original si pas déjà défini
+            if not self.nom_original:
+                self.nom_original = filename
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.titre} - {self.eleve}"
