@@ -5,6 +5,13 @@
   <meta charset="UTF-8" />
   <title>Bulletin trimestriel</title>
   <style>
+    @page {
+      margin-top: 10mm;
+      margin-bottom: 10mm;
+      margin-left: 20mm;
+      margin-right: 20mm;
+    }
+
     body {
       font-family: Arial, sans-serif;
       font-size: 12px;
@@ -99,7 +106,7 @@
 
     .signatures {
       width: 100%;
-      margin-top: 16px;
+      margin-top: 0px;
     }
 
     .signatures td {
@@ -158,8 +165,18 @@
     <td class="header-center">
       <div class="republique">République du Sénégal</div>
       <div>Ministère de l’Éducation nationale</div>
+      {% if academie %}
+        <div class="academie">
+          {{ academie }}
+        </div>
+      {% endif %}
+      {% if inspection %}
+        <div class="inspection">
+          {{ inspection }}
+        </div>
+      {% endif %}
       <div class="ecole">{{ ecole }}</div>
-      <div class="annee">ANNÉE SCOLAIRE : {{ annee_scolaire }}</div>
+      <!-- <div class="annee">ANNÉE SCOLAIRE : {{ annee_scolaire }}</div> -->
     </td>
 
     <!-- COLONNE DROITE : LOGO ÉCOLE -->
@@ -182,14 +199,14 @@
     <td>
       <strong>Trimestre :</strong> {{ trimestre_label }}<br>
       <strong>Effectif :</strong> {{ effectif }}<br>
-      <strong>Rang :</strong> {{ rang }}
+      <strong>Matricule :</strong> {{ eleve.matricule }}
     </td>
   </tr>
 </table>
 
 <!-- ================= TITRE ================= -->
 <div class="titre">
-  BULLETIN DU {{ trimestre_label|upper }} TRIMESTRE
+  BULLETIN DU {{ trimestre_label|upper }}
 </div>
 
 <!-- ================= ÉVALUATIONS ================= -->
@@ -227,7 +244,7 @@
     </tbody>
 </table>
 
-<!-- ================= RÉCAPITULATIF ================= -->
+<!-- ================= APPRECIATIONS ================= -->
 <table class="recap">
   <tr>
     <td><strong>Total :</strong> {{ total_points }} / {{ total_max }}</td>
@@ -240,23 +257,117 @@
 <table class="observations">
   <tr>
     <td>
-      <strong>Appréciation générale :</strong><br><br>
-      {{ appreciation }}
+      <strong>APPRECIATION :</strong><br>
+
+      <div style="margin-top: 10px;">
+        {% for a in appreciations %}
+          
+          {% if a.active %}
+              {% if a.libelle == "Excellent" %}
+                  <span style="background-color: green; color: white; padding:4px 10px; border-radius:12px; margin-right:6px;">
+              {% elif a.libelle == "Bien" %}
+                  <span style="background-color: #4CAF50; color: white; padding:4px 10px; border-radius:12px; margin-right:6px;">
+              {% elif a.libelle == "Assez bien" %}
+                  <span style="background-color: #2196F3; color: white; padding:4px 10px; border-radius:12px; margin-right:6px;">
+              {% elif a.libelle == "Passable" %}
+                  <span style="background-color: orange; color: white; padding:4px 10px; border-radius:12px; margin-right:6px;">
+              {% else %}
+                  <span style="background-color: red; color: white; padding:4px 10px; border-radius:12px; margin-right:6px;">
+              {% endif %}
+          {% else %}
+              <span style="border:1px solid #000; padding:4px 10px; border-radius:12px; margin-right:6px;">
+          {% endif %}
+
+              {{ a.libelle }}
+          </span>
+
+        {% endfor %}
+      </div>
     </td>
   </tr>
 </table>
 
+
+<!-- ================= RÉCAPITULATIF ================= -->
+{% if trimestre_label == "3e trimestre" %}
+  <table class="recap">
+    <tr>
+      <td style="width:50%; vertical-align: top;">
+        <strong>RÉCAPITULATIF :</strong><br><br>
+        <strong>Moyenne annuelle :</strong> {{ moyenne_annuelle }} / 10
+      </td>
+      <td style="width:50%; vertical-align: top; text-align:left;">
+        <br><br>
+        <strong>Classement annuel :</strong> {{ rang_annuel }}
+      </td>
+    </tr>
+  </table>
+{% endif %}
+
+
+<!-- ================= CONSEIL DE CLASSE ================= -->
+{% if trimestre_label == "3e trimestre" %}
+  <table class="recap">
+    <tr>
+      <td style="width:50%; vertical-align: top;">
+        <strong>DECISION DU CONSEIL DE CLASSE :</strong><br><br>
+        <strong>Décision :</strong> {{ decision_conseil|default:"—" }}
+      </td>
+      <td style="width:50%; vertical-align: top; text-align:left;">
+        <br><br>
+        {% if mention %}
+          <strong>Mention :</strong> {{ mention }}<br>
+        {% endif %}
+        <br>
+        {% if commentaire %}
+          <strong>Observation :</strong> {{ commentaire }}
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+{% endif %}
+
+<!-- <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+
+  <div style="font-size: 10px;">
+    Vérification en ligne :<br>
+    {{ verification_url }}
+  </div>
+
+</div> -->
+
 <!-- ================= SIGNATURES ================= -->
 <table class="signatures">
   <tr>
-    <td>Le/La Maître(sse)</td>
-    <td>Le Directeur</td>
+    
+    <!-- QR CODE -->
+    <td style="width: 50%; vertical-align: middle; text-align: left;">
+      <img 
+        src="data:image/png;base64,{{ qr_code_base64 }}" 
+        style="width: 80px;"
+      />
+    </td>
+
+    <!-- SIGNATURE -->
+    <td style="width: 50%; vertical-align: middle; text-align: right;">
+      
+      <div style="font-weight: bold;">
+        Le Directeur
+      </div>
+
+      {% if signature_directeur_base64 and bulletin.statut == "PUBLIE" %}
+        <img 
+          src="data:image/png;base64,{{ signature_directeur_base64 }}" 
+          style="width: 140px; margin-top: 10px;"
+        />
+      {% endif %}
+
+    </td>
+
   </tr>
 </table>
 
-<!-- <div class="date">
-  Bulletin généré le {{ bulletin.date_generation|date:"d/m/Y" }}
-</div> -->
+
 <footer>
   <div class="date">
     Bulletin généré le {{ bulletin.date_generation|date:"d/m/Y" }}
