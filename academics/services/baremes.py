@@ -13,9 +13,7 @@ def get_bareme_max_par_composante(
     return bareme.valeur_max
 
 
-def get_bareme_max_par_matiere(
-    *, tenant, matiere, classe, annee
-) -> int:
+def get_bareme_max_par_matiere(*, tenant, matiere, classe, annee) -> int:
     bareme = Bareme.objects.get(
         tenant=tenant,
         matiere=matiere,

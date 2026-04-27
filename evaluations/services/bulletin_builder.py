@@ -1,3 +1,5 @@
+# evaluations/services/bulletin_builder.py
+
 from evaluations.models import Note
 
 def build_bulletin_details(bulletin):
@@ -17,13 +19,13 @@ def build_bulletin_details(bulletin):
         if note.matiere:
             lignes.append({
                 "type": "MATIERE",
-                "libelle": note.matiere.libelle,
+                "libelle": note.matiere.nom,
                 "valeur": note.valeur,
             })
         elif note.composante:
             lignes.append({
                 "type": "COMPOSANTE",
-                "libelle": note.composante.nom,  # ✔️ correct
+                "libelle": note.composante.nom,
                 "valeur": note.valeur,
             })
 

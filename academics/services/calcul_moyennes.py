@@ -19,19 +19,21 @@ def calcul_moyenne_matiere(
                 eleve=eleve,
                 trimestre=trimestre,
                 matiere=matiere,
-            )
-            .select_related("matiere")
-            .first()
+            ).first()
         )
+
         if not note:
             return None
 
-        bareme = Bareme.objects.get(
-            tenant=tenant,
-            matiere=matiere,
-            classe=eleve.classe,
-            annee=trimestre.annee,
-        )
+        try:
+            bareme = Bareme.objects.get(
+                tenant=tenant,
+                matiere=matiere,
+                classe=eleve.classe,
+                annee=trimestre.annee,
+            )
+        except Bareme.DoesNotExist:
+            return None
 
         return round((note.valeur / bareme.valeur_max) * 10, 2)
 
@@ -44,8 +46,7 @@ def calcul_moyenne_matiere(
             eleve=eleve,
             trimestre=trimestre,
             composante__matiere=matiere,
-        )
-        .select_related("composante")
+        ).select_related("composante")
     )
 
     if not notes.exists():

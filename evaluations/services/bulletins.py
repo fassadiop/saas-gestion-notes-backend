@@ -1,18 +1,13 @@
-# evaluations/services/bulletins/py
+# evaluations/services/bulletins.py
 
 from django.db import transaction
 from django.forms import ValidationError
-from academics.models import Matiere, Bareme
-from evaluations.models import Note, Bulletin, Appreciation
-from evaluations.services.classements import recalculer_rangs
-
-
-from django.db import transaction
-from django.forms import ValidationError
+import uuid
 
 from academics.models import Matiere, Bareme
-from evaluations.models import Note, Bulletin, Appreciation
+from evaluations.models import Note, Bulletin
 from evaluations.services.classements import recalculer_rangs
+from evaluations.services.appreciations import get_appreciation
 
 
 @transaction.atomic
@@ -22,7 +17,7 @@ def generer_bulletin(*, tenant, eleve, trimestre, lecture_seule=False):
     (calculs + structure matières / composantes pour le PDF)
     """
 
-    # 🔒 Sécurité : interdiction de modification si déjà publié
+    # 🔒 Sécurité : interdiction modification si publié
     bulletin = Bulletin.objects.filter(
         tenant=tenant,
         eleve=eleve,
@@ -35,109 +30,118 @@ def generer_bulletin(*, tenant, eleve, trimestre, lecture_seule=False):
     classe = eleve.classe
     annee = classe.annee
 
+    # =========================
+    # RÉCUP DONNÉES
+    # =========================
+    notes = Note.objects.filter(
+        tenant=tenant,
+        eleve=eleve,
+        trimestre=trimestre
+    ).select_related("composante__matiere", "matiere")
+
+    baremes = Bareme.objects.filter(
+        tenant=tenant,
+        classe=classe,
+        annee=annee
+    )
+
+    # =========================
+    # MAPS
+    # =========================
+    bareme_map_composante = {
+        b.composante_id: b.valeur_max
+        for b in baremes if b.composante_id
+    }
+
+    bareme_map_matiere = {
+        b.matiere_id: b.valeur_max
+        for b in baremes if b.matiere_id
+    }
+
+    notes_map_composante = {
+        n.composante_id: n
+        for n in notes if n.composante_id
+    }
+
+    notes_map_matiere = {
+        n.matiere_id: n
+        for n in notes if n.matiere_id
+    }
+
+    # =========================
+    # CALCUL
+    # =========================
     total_points = 0.0
     total_max = 0.0
     details = []
 
-    # Parcours structuré : Matière → (Composantes)
     matieres = Matiere.objects.filter(
         tenant=tenant,
         actif=True
     ).order_by("ordre_affichage")
 
     for matiere in matieres:
+
+        # =========================
+        # CAS DIRECT
+        # =========================
+        if matiere.type_evaluation == "DIRECTE":
+            note = notes_map_matiere.get(matiere.id)
+            bareme_val = bareme_map_matiere.get(matiere.id)
+
+            if not bareme_val:
+                raise ValidationError(
+                    f"Barème manquant pour matière {matiere.nom}"
+                )
+
+            if note:
+                details.append({
+                    "matiere": matiere.nom,
+                    "total_obtenu": note.valeur,
+                    "total_max": bareme_val,
+                    "composantes": [],
+                })
+
+                total_points += note.valeur
+                total_max += bareme_val
+
+            continue
+
+        # =========================
+        # CAS PAR COMPOSANTE
+        # =========================
+        composantes = matiere.composante_set.filter(
+            tenant=tenant,
+            actif=True
+        )
+
         composantes_data = []
         total_matiere = 0.0
         total_matiere_max = 0.0
 
-        # =========================
-        # CAS MATIÈRE DIRECTE
-        # =========================
-        if matiere.type_evaluation == "DIRECTE":
-            # 🔑 récupérer la composante technique ("Note globale")
-            composante = matiere.composante_set.filter(
-                tenant=tenant
-            ).first()
-
-            if not composante:
-                # aucune note possible si la composante n'existe pas
-                continue
-
-            note = Note.objects.filter(
-                tenant=tenant,
-                eleve=eleve,
-                composante=composante,
-                trimestre=trimestre
-            ).first()
-
-            if not note:
-                continue
-
-            try:
-                bareme = Bareme.objects.get(
-                    tenant=tenant,
-                    composante=composante,
-                    classe=classe,
-                    annee=annee
-                )
-            except Bareme.DoesNotExist:
-                raise ValidationError(
-                    f"Barème manquant pour la matière {matiere.nom}."
-                )
-
-            details.append({
-                "matiere": matiere.nom,
-                "total_obtenu": note.valeur,
-                "total_max": bareme.valeur_max,
-                "composantes": [],  # matière directe → pas de sous-lignes
-            })
-
-            total_points += note.valeur
-            total_max += bareme.valeur_max
-            continue
-
-        # ============================
-        # CAS MATIÈRE AVEC COMPOSANTES
-        # ============================
-        composantes = matiere.composante_set.filter(
-            tenant=tenant
-        )
-
         for composante in composantes:
-            note = Note.objects.filter(
-                tenant=tenant,
-                eleve=eleve,
-                composante=composante,
-                trimestre=trimestre
-            ).first()
+            note = notes_map_composante.get(composante.id)
+            bareme_val = bareme_map_composante.get(composante.id)
+
+            if not bareme_val:
+                raise ValidationError(
+                    f"Barème manquant pour {composante.nom}"
+                )
 
             if not note:
                 continue
-
-            try:
-                bareme = Bareme.objects.get(
-                    tenant=tenant,
-                    composante=composante,
-                    classe=classe,
-                    annee=annee
-                )
-            except Bareme.DoesNotExist:
-                raise ValidationError(
-                    f"Barème manquant pour {composante.nom}."
-                )
 
             composantes_data.append({
                 "nom": composante.nom,
                 "obtenu": note.valeur,
-                "max": bareme.valeur_max,
+                "max": bareme_val,
             })
 
             total_points += note.valeur
-            total_max += bareme.valeur_max
+            total_max += bareme_val
             total_matiere += note.valeur
-            total_matiere_max += bareme.valeur_max
+            total_matiere_max += bareme_val
 
-        # On n’ajoute la matière que si elle a au moins une composante notée
         if composantes_data:
             details.append({
                 "matiere": matiere.nom,
@@ -146,41 +150,59 @@ def generer_bulletin(*, tenant, eleve, trimestre, lecture_seule=False):
                 "composantes": composantes_data,
             })
 
+    # =========================
+    # MOYENNE
+    # =========================
     moyenne_sur_10 = (
         round((total_points / total_max) * 10, 2)
         if total_max > 0 else None
     )
 
-    appreciation = None
-    if moyenne_sur_10 is not None:
-        appreciation = Appreciation.objects.filter(
-            tenant=tenant,
-            moyenne_min__lte=moyenne_sur_10,
-            moyenne_max__gte=moyenne_sur_10
-        ).first()
-
-    bulletin, _ = Bulletin.objects.update_or_create(
+    appreciation = get_appreciation(
         tenant=tenant,
-        eleve=eleve,
-        trimestre=trimestre,
-        defaults={
-            "total_points": total_points,
-            "total_max": total_max,
-            "moyenne_sur_10": moyenne_sur_10,
-            "appreciation": appreciation,
-            "statut": bulletin.statut if bulletin else "BROUILLON",
-        }
+        moyenne=moyenne_sur_10
     )
 
-    # 📌 Attachement dynamique pour le PDF
+    # =========================
+    # SAUVEGARDE
+    # =========================
+    if bulletin:
+        bulletin.total_points = total_points
+        bulletin.total_max = total_max
+        bulletin.moyenne_sur_10 = moyenne_sur_10
+        bulletin.appreciation = appreciation
+        bulletin.save()
+    else:
+        bulletin = Bulletin.objects.create(
+            tenant=tenant,
+            eleve=eleve,
+            trimestre=trimestre,
+            total_points=total_points,
+            total_max=total_max,
+            moyenne_sur_10=moyenne_sur_10,
+            appreciation=appreciation,
+            statut="BROUILLON"
+        )
+
+    # =========================
+    # DETAILS POUR PDF
+    # =========================
     bulletin.details_matiere = details
 
-    # Recalcul du classement
+    # =========================
+    # CLASSEMENT
+    # =========================
     recalculer_rangs(
         tenant=tenant,
         classe=classe,
         trimestre=trimestre
     )
 
-    return bulletin
+    # =========================
+    # TOKEN QR (AJOUT)
+    # =========================
+    if not bulletin.verification_token:
+        bulletin.verification_token = uuid.uuid4().hex
+        bulletin.save()
 
+    return bulletin
