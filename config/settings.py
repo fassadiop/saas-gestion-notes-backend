@@ -40,9 +40,9 @@ SECRET_KEY = 'django-insecure-%u87dt-w$-s-zvy9$)ehg)4$21p=opk0n@7+-cyb@ry_%qcha_
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
-CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -58,11 +58,15 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
 
+    "django_filters",
+
     # Apps SaaS
     "core",
     "accounts",
     "academics",
     "evaluations",
+    "analytics",
+    "notifications",
 ]
 
 MIDDLEWARE = [
@@ -91,6 +95,12 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 10,
+    
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend"
+    ],
 }
 
 ROOT_URLCONF = 'config.urls'
