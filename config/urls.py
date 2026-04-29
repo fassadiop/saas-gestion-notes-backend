@@ -22,6 +22,10 @@ from evaluations.views import (
     TrimestreViewSet,
     verify_bulletin,
 )
+from django.http import JsonResponse
+
+def home(request):
+    return JsonResponse({"status": "API running"})
 
 router = DefaultRouter()
 router.register(r"classes", ClasseViewSet)
