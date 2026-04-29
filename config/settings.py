@@ -1,3 +1,9 @@
+import dj_database_url
+import os
+
+from dotenv import load_dotenv
+load_dotenv()
+
 """
 Django settings for config project.
 
@@ -35,14 +41,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-%u87dt-w$-s-zvy9$)ehg)4$21p=opk0n@7+-cyb@ry_%qcha_'
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv("DEBUG") == "True"
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://samabulletin.edu.sn",
+]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -76,6 +84,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    'whitenoise.middleware.WhiteNoiseMiddleware',
 
     # MIDDLEWARE TENANT (JUSTE APRÈS AuthenticationMiddleware)
     "core.middleware.TenantMiddleware",
@@ -157,16 +166,10 @@ USE_L10N = True
 
 AUTH_USER_MODEL = "accounts.User"
 
-
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "saas_notes",
-        "USER": "postgres",
-        "PASSWORD": "Olg@2974",
-        "HOST": "localhost",
-        "PORT": "5432",
-    }
+    "default": dj_database_url.config(
+        default=os.getenv("DATABASE_URL")
+    )
 }
 
 DEFAULT_CHARSET = "utf-8"
@@ -178,4 +181,8 @@ AUTHENTICATION_BACKENDS = [
 TEMPLATES[0]["DIRS"] = [BASE_DIR / "templates"]
 
 STATIC_URL = "/static/"
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
 STATICFILES_DIRS = [BASE_DIR / "static"]
+
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'

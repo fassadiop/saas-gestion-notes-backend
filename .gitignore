@@ -26,3 +26,6 @@ staticfiles/
 # OS
 .DS_Store
 Thumbs.db
+
+bulletins/*.pdf
+tenant_*/

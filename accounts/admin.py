@@ -1,7 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User
+from .models import User, UserScope
 from core.admin_mixins import TenantAdminMixin
+
 
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
@@ -23,3 +24,15 @@ class CustomUserAdmin(UserAdmin):
         if request.user.role != "ADMIN_SAAS":
             form.base_fields["tenant"].disabled = True
         return form
+
+@admin.register(UserScope)
+class UserScopeAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "inspection",
+        "academie",
+        "date_debut",
+        "date_fin",
+        "actif"
+    )
+    list_filter = ("actif", "inspection", "academie")
