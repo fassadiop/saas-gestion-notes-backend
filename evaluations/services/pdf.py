@@ -62,7 +62,7 @@ def generer_bulletin_pdf(*, bulletin):
             bulletin.tenant.signature_directeur.path
         )
 
-    base_url = "http://localhost:5173"  # ⚠️ adapte prod
+    base_url = settings.FRONTEND_URL
 
     verification_url = f"{base_url}/verify/bulletin/{bulletin.verification_token}"
 
