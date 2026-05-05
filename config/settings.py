@@ -48,15 +48,17 @@ DEBUG = os.getenv("DEBUG") == "True"
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
-    "https://samabulletin.edu.sn",
+    "https://samabulletin.app",
+    "https://www.samabulletin.app",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://saas-gestion-notes-backend.onrender.com",
+    "https://samabulletin.app",
+    "https://www.samabulletin.app",
 ]
 
 # Application definition
