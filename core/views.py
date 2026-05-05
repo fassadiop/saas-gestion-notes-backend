@@ -4,7 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from core.models import Tenant
 from core.serializers import TenantSerializer
 from accounts.permissions import IsAdminSaaS
@@ -140,9 +140,11 @@ class InspectionViewSet(ModelViewSet):
 class RegionViewSet(ModelViewSet):
     queryset = Region.objects.all()
     serializer_class = RegionSerializer
+    permission_classes = [AllowAny]
 
 
 class DepartementViewSet(ModelViewSet):
     queryset = Departement.objects.all()
     serializer_class = DepartementSerializer
     filterset_fields = ["region"]
+    permission_classes = [AllowAny]
