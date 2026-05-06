@@ -10,6 +10,7 @@ from weasyprint import HTML
 from evaluations.models import Appreciation
 from evaluations.services.annuel import calculer_moyenne_annuelle
 from evaluations.services.classements import get_rang_annuel
+from django.contrib.staticfiles import finders
 
 def image_base64(path):
     if not os.path.exists(path):
@@ -69,13 +70,8 @@ def generer_bulletin_pdf(*, bulletin):
     qr_code_base64 = generate_qr_base64(verification_url)
 
     context = {
-        # 🔥 IMAGES BASE64
-        "drapeau_sn_base64": image_base64(
-            os.path.join(settings.BASE_DIR, "static", "images", "drapeau_sn.png")
-        ),
-        "logo_men_base64": image_base64(
-            os.path.join(settings.BASE_DIR, "static", "images", "logo-men.png")
-        ),
+        "drapeau_sn_base64": image_base64_static("images/drapeau_sn.png"),
+        "logo_men_base64": image_base64_static("images/logo-men.png"),
 
         # 🔥 DONNÉES BULLETIN
         "academie": bulletin.tenant.academie.nom if bulletin.tenant.academie else "",
@@ -123,3 +119,13 @@ def generer_bulletin_pdf(*, bulletin):
     HTML(string=html).write_pdf(filepath)
 
     return filepath
+
+def image_base64_static(path):
+    file_path = finders.find(path)
+
+    if not file_path:
+        print(f"❌ STATIC NOT FOUND: {path}")
+        return None
+
+    with open(file_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()

@@ -147,6 +147,37 @@
         .logo-cell.right {
         text-align: right;
     }
+
+      .header-label {
+      font-size: 10px;
+      font-weight: bold;
+      margin-top: 3px;
+    }
+
+    .logo {
+      width: 55px;
+      display: block;
+    }
+
+    .logo-cell.left {
+      text-align: left;
+    }
+
+    .logo-cell.right {
+      text-align: right;
+    }
+
+    .logo-cell img {
+      display: block;
+    }
+
+    .logo-cell.left img {
+      margin-left: 0;
+    }
+
+    .logo-cell.right img {
+      margin-left: auto;
+    }
   </style>
 </head>
 <body>
@@ -154,37 +185,34 @@
 <!-- ================= EN-TÊTE ================= -->
 <table class="header">
   <tr>
-    <!-- COLONNE GAUCHE : DRAPEAU -->
+
+    <!-- GAUCHE -->
     <td class="logo-cell left">
       {% if drapeau_sn_base64 %}
         <img src="data:image/png;base64,{{ drapeau_sn_base64 }}" class="logo">
+        <div class="header-label">République du Sénégal</div>
       {% endif %}
     </td>
 
-    <!-- COLONNE CENTRALE : TITRES -->
+    <!-- CENTRE -->
     <td class="header-center">
-      <div class="republique">République du Sénégal</div>
-      <div>Ministère de l’Éducation nationale</div>
       {% if academie %}
-        <div class="academie">
-          {{ academie }}
-        </div>
+        <div class="academie">{{ academie }}</div>
       {% endif %}
       {% if inspection %}
-        <div class="inspection">
-          {{ inspection }}
-        </div>
+        <div class="inspection">{{ inspection }}</div>
       {% endif %}
       <div class="ecole">{{ ecole }}</div>
-      <!-- <div class="annee">ANNÉE SCOLAIRE : {{ annee_scolaire }}</div> -->
     </td>
 
-    <!-- COLONNE DROITE : LOGO ÉCOLE -->
+    <!-- DROITE -->
     <td class="logo-cell right">
       {% if logo_men_base64 %}
         <img src="data:image/png;base64,{{ logo_men_base64 }}" class="logo">
+        <div class="header-label">Ministère de l’Éducation nationale</div>
       {% endif %}
     </td>
+
   </tr>
 </table>
 
