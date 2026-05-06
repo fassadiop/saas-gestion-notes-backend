@@ -178,35 +178,99 @@
     .logo-cell.right img {
       margin-left: auto;
     }
+
+    /* ===== HEADER PREMIUM ===== */
+
+    .header-col {
+      vertical-align: middle; /* 🔥 alignement vertical parfait */
+    }
+
+    /* Ajustement colonnes */
+    .logo-cell.left,
+    .logo-cell.right {
+      width: 25%;
+      text-align: center;
+    }
+
+    .header-center {
+      width: 50%;
+      text-align: center;
+    }
+
+    /* Logos */
+    .logo {
+      width: 55px;
+      display: block;
+      margin: 0 auto;
+    }
+
+    /* Texte gauche/droite */
+    .header-label {
+      font-size: 10px;
+      font-weight: bold;
+      margin-top: 4px;
+    }
+
+    .header-sub {
+      font-size: 9px;
+      font-style: italic;
+    }
+
+    /* Hiérarchie centrale */
+    .academie {
+      font-size: 11px;
+      font-weight: bold;
+    }
+
+    .inspection {
+      font-size: 11px;
+    }
+
+    .ecole {
+      font-weight: bold;
+      font-size: 14px;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+
+    .annee {
+      font-size: 10px;
+      margin-top: 2px;
+    }
   </style>
 </head>
 <body>
 
 <!-- ================= EN-TÊTE ================= -->
+<!-- ================= EN-TÊTE PREMIUM ================= -->
 <table class="header">
   <tr>
 
     <!-- GAUCHE -->
-    <td class="logo-cell left">
+    <td class="logo-cell left header-col">
       {% if drapeau_sn_base64 %}
         <img src="data:image/png;base64,{{ drapeau_sn_base64 }}" class="logo">
         <div class="header-label">République du Sénégal</div>
+        <div class="header-sub">Un Peuple – Un But – Une Foi</div>
       {% endif %}
     </td>
 
     <!-- CENTRE -->
-    <td class="header-center">
+    <td class="header-center header-col">
       {% if academie %}
         <div class="academie">{{ academie }}</div>
       {% endif %}
+
       {% if inspection %}
         <div class="inspection">{{ inspection }}</div>
       {% endif %}
+
       <div class="ecole">{{ ecole }}</div>
+      <div class="annee">Année scolaire : {{ annee_scolaire }}</div>
     </td>
 
     <!-- DROITE -->
-    <td class="logo-cell right">
+    <td class="logo-cell right header-col">
       {% if logo_men_base64 %}
         <img src="data:image/png;base64,{{ logo_men_base64 }}" class="logo">
         <div class="header-label">Ministère de l’Éducation nationale</div>
