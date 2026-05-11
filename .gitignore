@@ -29,3 +29,8 @@ Thumbs.db
 
 bulletins/*.pdf
 tenant_*/
+
+# autoriser images PDF
+!static/
+!static/images/
+!static/images/*

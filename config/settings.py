@@ -54,13 +54,13 @@ CORS_ALLOW_ALL_ORIGINS = False
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
-    "https://samabulletin.app",
-    "https://www.samabulletin.app",
+    "https://app.samabulletin.app",
+    "https://www.app.samabulletin.app",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://samabulletin.app",
-    "https://www.samabulletin.app",
+    "https://app.samabulletin.app",
+    "https://www.app.samabulletin.app",
 ]
 
 # Application definition
